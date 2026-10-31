@@ -26,17 +26,21 @@ function printHelp(): void {
 
 Options:
   --out <path>          Output file (default: <name>_streetview.gpx)
-  --start <ISO-UTC>     Video start in UTC (e.g. 2025-11-17T08:48:32Z)
+  --start <ISO-UTC>     MP4 creation_time in UTC (ffprobe format.tags.creation_time)
+  --keep-gpx            Keep Insta360 GPX timestamps (do not shift to VID_*)
   --offset <hours>      Camera offset when reading VID_* (default: -3, Chile)
   --keep-hz             Do not downsample to 1 point/second
   --analyze-only        Report only, do not write a file
   -h, --help            Show this help
 
+Street View compares GPS times to the MP4 creation_time, which often differs
+from the VID_* filename after a Studio re-export. Prefer --start from ffprobe.
+
 Recommended flow (Insta360 → Street View Studio):
   1. Export the GPX from Insta360 Studio (same clip as the 360 MP4).
-  2. Keep the VID_YYYYMMDD_HHMMSS prefix in the .gpx filename.
-  3. npm run fix -- ./my-clips/VID_....gpx
-  4. Upload the MP4 + the *_streetview.gpx at https://streetviewstudio.maps.google.com/
+  2. npm run fix -- ./clip.gpx --start <MP4-creation_time-UTC>
+     (or --keep-gpx when the GPX already matches the MP4)
+  3. Upload the MP4 + the *_streetview.gpx at https://streetviewstudio.maps.google.com/
 `)
 }
 
@@ -48,9 +52,16 @@ function parseArgs(argv: string[]) {
     start?: string
     offset: number
     keepHz: boolean
+    keepGpx: boolean
     analyzeOnly: boolean
     help: boolean
-  } = { offset: -3, keepHz: false, analyzeOnly: false, help: false }
+  } = {
+    offset: -3,
+    keepHz: false,
+    keepGpx: false,
+    analyzeOnly: false,
+    help: false,
+  }
 
   while (args.length) {
     const a = args.shift()!
@@ -59,6 +70,7 @@ function parseArgs(argv: string[]) {
     else if (a === '--start') opts.start = args.shift()
     else if (a === '--offset') opts.offset = Number(args.shift())
     else if (a === '--keep-hz') opts.keepHz = true
+    else if (a === '--keep-gpx') opts.keepGpx = true
     else if (a === '--analyze-only') opts.analyzeOnly = true
     else if (a.startsWith('-')) {
       console.error(`Unknown option: ${a}`)
@@ -123,12 +135,18 @@ async function main() {
     console.error(`Invalid --start: ${opts.start}`)
     process.exit(1)
   }
+  if (opts.start && opts.keepGpx) {
+    console.error('Use either --start or --keep-gpx, not both.')
+    process.exit(1)
+  }
 
   const result = fixGpx(xml, {
     sourceFilename: filename,
     utcOffsetHours: opts.offset,
     downsampleTo1Hz: !opts.keepHz,
     videoStartUtc,
+    videoStartLabel: opts.start ? 'MP4 creation_time' : null,
+    syncSource: opts.start ? 'mp4' : opts.keepGpx ? 'gpx' : 'filename',
   })
 
   printAnalysis('Before', result.analysisBefore)

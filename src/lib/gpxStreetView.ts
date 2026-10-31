@@ -47,6 +47,10 @@ export type GpxAnalysis = {
   bounds?: { minlat: number; maxlat: number; minlon: number; maxlon: number }
   videoStartFromFilename: Date | null
   timeOffsetSecondsVsFilename: number | null
+  /** Start used for Street View sync (MP4 / manual / filename). */
+  videoStartTarget: Date | null
+  videoStartTargetLabel: string | null
+  timeOffsetSecondsVsTarget: number | null
   maxSpeedKmh: number
   distanceKm: number
   issues: GpxIssue[]
@@ -54,9 +58,23 @@ export type GpxAnalysis = {
   problems: ProblemSegment[]
 }
 
+/** Where the GPX timeline should be anchored for Street View. */
+export type SyncSource = 'mp4' | 'manual' | 'filename' | 'gpx'
+
 export type FixOptions = {
   /** Video start time in UTC. If omitted, inferred from VID_* filename. */
   videoStartUtc?: Date | null
+  /**
+   * Label for `videoStartUtc` in reports (e.g. "MP4 creation_time").
+   * When set with videoStartUtc, analysis compares against this target —
+   * not the VID_* name — so a re-exported MP4 does not look like an error.
+   */
+  videoStartLabel?: string | null
+  /**
+   * When no videoStartUtc: `filename` (default) shifts to VID_*;
+   * `gpx` keeps Insta360 timestamps (often already match a re-exported MP4).
+   */
+  syncSource?: SyncSource
   /** Camera UTC offset when interpreting VID_* (continental Chile = -3). */
   utcOffsetHours?: number
   /** Keep only 1 point per second. Default true. */
@@ -70,6 +88,8 @@ export type FixResult = {
   gpxXml: string
   applied: string[]
   outputFilename: string
+  syncSource: SyncSource
+  videoStartUtc: Date | null
 }
 
 const GPX_NS = 'http://www.topografix.com/GPX/1/1'
@@ -235,6 +255,9 @@ export function analyzeTrack(
     bounds?: GpxAnalysis['bounds']
     sourceFilename?: string
     utcOffsetHours?: number
+    /** Expected video start (MP4 / manual). Wins over filename for sync checks. */
+    targetVideoStartUtc?: Date | null
+    targetVideoStartLabel?: string | null
   } = {},
 ): GpxAnalysis {
   const issues: GpxIssue[] = []
@@ -261,6 +284,9 @@ export function analyzeTrack(
       bounds: opts.bounds,
       videoStartFromFilename: null,
       timeOffsetSecondsVsFilename: null,
+      videoStartTarget: opts.targetVideoStartUtc ?? null,
+      videoStartTargetLabel: opts.targetVideoStartLabel ?? null,
+      timeOffsetSecondsVsTarget: null,
       maxSpeedKmh: 0,
       distanceKm: 0,
       issues,
@@ -415,19 +441,53 @@ export function analyzeTrack(
   if (videoStartFromFilename) {
     timeOffsetSecondsVsFilename =
       (timeStart.getTime() - videoStartFromFilename.getTime()) / 1000
-    if (Math.abs(timeOffsetSecondsVsFilename) > 2) {
-      issues.push({
-        id: 'video-sync',
-        severity: 'error',
-        message: `GPX start (${formatGpxTime(timeStart)}) does not match video from filename (${formatGpxTime(videoStartFromFilename)}, ${formatUtcOffsetHours(opts.utcOffsetHours ?? -3)}). Offset ${timeOffsetSecondsVsFilename.toFixed(0)} s. Street View will fail if the MP4 uses the file time.`,
-      })
-    }
-  } else if (opts.sourceFilename) {
+  } else if (opts.sourceFilename && !opts.targetVideoStartUtc) {
     issues.push({
       id: 'no-vid-name',
       severity: 'info',
       message:
         'Could not infer video time from filename (expected VID_YYYYMMDD_HHMMSS).',
+    })
+  }
+
+  const hasExplicitTarget = opts.targetVideoStartUtc != null
+  const videoStartTarget =
+    opts.targetVideoStartUtc ?? videoStartFromFilename ?? null
+  const videoStartTargetLabel =
+    opts.targetVideoStartLabel ??
+    (hasExplicitTarget
+      ? 'video start'
+      : videoStartFromFilename
+        ? `VID_* (${formatUtcOffsetHours(opts.utcOffsetHours ?? -3)})`
+        : null)
+
+  let timeOffsetSecondsVsTarget: number | null = null
+  if (videoStartTarget) {
+    timeOffsetSecondsVsTarget =
+      (timeStart.getTime() - videoStartTarget.getTime()) / 1000
+    if (Math.abs(timeOffsetSecondsVsTarget) > 2) {
+      issues.push({
+        id: 'video-sync',
+        severity: 'error',
+        message: hasExplicitTarget
+          ? `GPX start (${formatGpxTime(timeStart)}) does not overlap the ${videoStartTargetLabel} (${formatGpxTime(videoStartTarget)}). Offset ${timeOffsetSecondsVsTarget.toFixed(0)} s. Street View compares GPS times to the MP4 creation_time.`
+          : `GPX start (${formatGpxTime(timeStart)}) does not match VID_* (${formatGpxTime(videoStartTarget)}, ${formatUtcOffsetHours(opts.utcOffsetHours ?? -3)}). Offset ${timeOffsetSecondsVsTarget.toFixed(0)} s. If the MP4 was re-exported, prefer its creation_time over the filename.`,
+      })
+    }
+  }
+
+  if (
+    hasExplicitTarget &&
+    opts.targetVideoStartUtc &&
+    videoStartFromFilename &&
+    Math.abs(
+      opts.targetVideoStartUtc.getTime() - videoStartFromFilename.getTime(),
+    ) > 2_000
+  ) {
+    issues.push({
+      id: 'vid-vs-mp4',
+      severity: 'info',
+      message: `VID_* name implies ${formatGpxTime(videoStartFromFilename)}, but sync target is ${formatGpxTime(opts.targetVideoStartUtc)} (${videoStartTargetLabel ?? 'override'}). Street View uses the MP4 metadata time.`,
     })
   }
 
@@ -456,6 +516,9 @@ export function analyzeTrack(
     bounds: opts.bounds,
     videoStartFromFilename,
     timeOffsetSecondsVsFilename,
+    videoStartTarget,
+    videoStartTargetLabel,
+    timeOffsetSecondsVsTarget,
     maxSpeedKmh,
     distanceKm: distanceM / 1000,
     issues,
@@ -535,10 +598,47 @@ ${body}
 export function fixGpx(xml: string, options: FixOptions = {}): FixResult {
   const parsed = parseGpx(xml)
   const utcOffsetHours = options.utcOffsetHours ?? -3
+  const syncSource: SyncSource =
+    options.syncSource ??
+    (options.videoStartUtc
+      ? options.videoStartLabel?.toLowerCase().includes('mp4')
+        ? 'mp4'
+        : 'manual'
+      : 'filename')
+
+  const filenameStart = options.sourceFilename
+    ? inferVideoStartFromFilename(options.sourceFilename, utcOffsetHours)
+    : null
+
+  let videoStart: Date | null = null
+  let videoStartLabel: string | null = null
+
+  if (options.videoStartUtc) {
+    videoStart = options.videoStartUtc
+    videoStartLabel =
+      options.videoStartLabel ??
+      (syncSource === 'mp4' ? 'MP4 creation_time' : 'manual video start')
+  } else if (syncSource === 'gpx') {
+    videoStart = null
+    videoStartLabel = null
+  } else if (filenameStart) {
+    videoStart = filenameStart
+    videoStartLabel = `VID_* (${formatUtcOffsetHours(utcOffsetHours)})`
+  }
+
+  const analysisTarget =
+    videoStart ??
+    (syncSource === 'gpx' && parsed.points[0] ? parsed.points[0].time : null)
+  const analysisLabel =
+    videoStartLabel ??
+    (syncSource === 'gpx' ? 'kept GPX timestamps' : null)
+
   const analysisBefore = analyzeTrack(parsed.points, {
     bounds: parsed.bounds,
     sourceFilename: options.sourceFilename,
     utcOffsetHours,
+    targetVideoStartUtc: analysisTarget,
+    targetVideoStartLabel: analysisLabel,
   })
 
   const applied: string[] = []
@@ -553,25 +653,25 @@ export function fixGpx(xml: string, options: FixOptions = {}): FixResult {
     )
   }
 
-  const videoStart =
-    options.videoStartUtc ??
-    (options.sourceFilename
-      ? inferVideoStartFromFilename(options.sourceFilename, utcOffsetHours)
-      : null)
-
   if (videoStart && points.length > 0) {
     const before = points[0].time
     points = shiftToVideoStart(points, videoStart)
     if (before.getTime() !== points[0].time.getTime()) {
       applied.push(
-        `Time aligned to video: ${formatGpxTime(before)} → ${formatGpxTime(points[0].time)} (VID_* at ${formatUtcOffsetHours(utcOffsetHours)} → UTC).`,
+        `Time aligned to ${videoStartLabel ?? 'video'}: ${formatGpxTime(before)} → ${formatGpxTime(points[0].time)}.`,
       )
     } else {
-      applied.push('Timestamps already aligned with video from filename.')
+      applied.push(
+        `Timestamps already aligned with ${videoStartLabel ?? 'video'}.`,
+      )
     }
+  } else if (syncSource === 'gpx') {
+    applied.push(
+      'Keeping original GPX timestamps (often match a re-exported MP4 creation_time; VID_* name may disagree).',
+    )
   } else {
     applied.push(
-      'No video time inferred: keeping GPX timestamps (use VID_* name or --start).',
+      'No video time inferred: keeping GPX timestamps (drop the MP4, use VID_* name, or set a manual start).',
     )
   }
 
@@ -593,6 +693,10 @@ export function fixGpx(xml: string, options: FixOptions = {}): FixResult {
     },
     sourceFilename: options.sourceFilename,
     utcOffsetHours,
+    // After a successful shift, the track should match this target —
+    // do not re-flag against VID_* when MP4/manual / keep-GPX was used.
+    targetVideoStartUtc: videoStart ?? (points[0]?.time ?? null),
+    targetVideoStartLabel: analysisLabel,
   })
 
   const rawName = options.sourceFilename ?? 'track.gpx'
@@ -608,5 +712,7 @@ export function fixGpx(xml: string, options: FixOptions = {}): FixResult {
     gpxXml,
     applied,
     outputFilename,
+    syncSource,
+    videoStartUtc: videoStart ?? points[0]?.time ?? null,
   }
 }

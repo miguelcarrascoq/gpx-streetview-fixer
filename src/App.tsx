@@ -4,10 +4,17 @@ import TrackMap from './components/TrackMap'
 import {
   fixGpx,
   formatGpxTime,
+  inferVideoStartFromFilename,
+  parseGpx,
   parseVidLocalParts,
   type FixResult,
   type GpxIssue,
+  type SyncSource,
 } from './lib/gpxStreetView'
+import {
+  formatMp4CreationTimeUtc,
+  readMp4CreationTime,
+} from './lib/mp4CreationTime'
 import {
   DEFAULT_TIME_ZONE,
   utcOffsetHoursAt,
@@ -55,6 +62,12 @@ function AnalysisCard({
           {formatGpxTime(a.timeStart)} → {formatGpxTime(a.timeEnd)}
         </p>
       )}
+      {a.videoStartTarget && (
+        <p className="mono subtle">
+          Sync target ({a.videoStartTargetLabel ?? 'video'}):{' '}
+          {formatGpxTime(a.videoStartTarget)}
+        </p>
+      )}
       <p className="mono subtle">
         lat [{a.latMin.toFixed(5)}, {a.latMax.toFixed(5)}] · lon [
         {a.lonMin.toFixed(5)}, {a.lonMax.toFixed(5)}]
@@ -71,15 +84,21 @@ function AnalysisCard({
   )
 }
 
+type SyncMode = SyncSource
+
 export default function App() {
   const [fileName, setFileName] = useState<string | null>(null)
+  const [gpxXml, setGpxXml] = useState<string | null>(null)
   const [result, setResult] = useState<FixResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [startOverride, setStartOverride] = useState('')
+  const [manualStart, setManualStart] = useState('')
+  const [mp4Name, setMp4Name] = useState<string | null>(null)
+  const [mp4CreationUtc, setMp4CreationUtc] = useState<Date | null>(null)
+  const [syncMode, setSyncMode] = useState<SyncMode>('filename')
   const [timeZone, setTimeZone] = useState(DEFAULT_TIME_ZONE)
   const [mapWhich, setMapWhich] = useState<'before' | 'after'>('before')
-
+  const [vidVsGpxHint, setVidVsGpxHint] = useState<string | null>(null)
   const errorCount = useMemo(
     () => result?.analysisAfter.issues.filter((i) => i.severity === 'error').length ?? 0,
     [result],
@@ -90,7 +109,115 @@ export default function App() {
     return mapWhich === 'before' ? result.analysisBefore : result.analysisAfter
   }, [result, mapWhich])
 
-  async function handleFile(file: File) {
+  const filenameStartPreview = useMemo(() => {
+    if (!fileName) return null
+    const wall = parseVidLocalParts(fileName)
+    if (!wall) return null
+    const offsetN = utcOffsetHoursForWallClock(timeZone, wall)
+    return inferVideoStartFromFilename(
+      fileName,
+      Number.isFinite(offsetN) ? offsetN : -3,
+    )
+  }, [fileName, timeZone])
+
+  function resolveSync(xml: string, name: string): {
+    syncSource: SyncMode
+    videoStartUtc: Date | null
+    videoStartLabel: string | null
+    utcOffsetHours: number
+  } {
+    const wall = parseVidLocalParts(name)
+    const offsetN = wall
+      ? utcOffsetHoursForWallClock(timeZone, wall)
+      : utcOffsetHoursAt(timeZone, new Date())
+    const utcOffsetHours = Number.isFinite(offsetN) ? offsetN : -3
+
+    if (syncMode === 'mp4') {
+      if (!mp4CreationUtc) {
+        throw new Error('Choose the matching .mp4 so we can read its creation_time.')
+      }
+      return {
+        syncSource: 'mp4',
+        videoStartUtc: mp4CreationUtc,
+        videoStartLabel: 'MP4 creation_time',
+        utcOffsetHours,
+      }
+    }
+    if (syncMode === 'manual') {
+      const raw = manualStart.trim()
+      if (!raw) {
+        throw new Error('Enter the MP4 creation_time as ISO UTC, e.g. 2026-09-14T17:11:54Z')
+      }
+      const videoStartUtc = new Date(raw)
+      if (Number.isNaN(videoStartUtc.getTime())) {
+        throw new Error('Invalid start time. Use ISO UTC, e.g. 2026-09-14T17:11:54Z')
+      }
+      return {
+        syncSource: 'manual',
+        videoStartUtc,
+        videoStartLabel: 'manual video start',
+        utcOffsetHours,
+      }
+    }
+    if (syncMode === 'gpx') {
+      return {
+        syncSource: 'gpx',
+        videoStartUtc: null,
+        videoStartLabel: null,
+        utcOffsetHours,
+      }
+    }
+    void xml
+    return {
+      syncSource: 'filename',
+      videoStartUtc: null,
+      videoStartLabel: null,
+      utcOffsetHours,
+    }
+  }
+
+  function runFix(xml: string, name: string) {
+    const { syncSource, videoStartUtc, videoStartLabel, utcOffsetHours } =
+      resolveSync(xml, name)
+    const fixed = fixGpx(xml, {
+      sourceFilename: name,
+      utcOffsetHours,
+      syncSource,
+      videoStartUtc,
+      videoStartLabel,
+    })
+    setResult(fixed)
+  }
+
+  function refreshVidVsGpxHint(xml: string, name: string) {
+    try {
+      const parsed = parseGpx(xml)
+      const wall = parseVidLocalParts(name)
+      const offsetN = wall
+        ? utcOffsetHoursForWallClock(timeZone, wall)
+        : utcOffsetHoursAt(timeZone, new Date())
+      const fromName = inferVideoStartFromFilename(
+        name,
+        Number.isFinite(offsetN) ? offsetN : -3,
+      )
+      const gpxStart = parsed.points[0]?.time
+      if (fromName && gpxStart) {
+        const deltaH =
+          Math.abs(gpxStart.getTime() - fromName.getTime()) / 3_600_000
+        if (deltaH >= 1) {
+          setVidVsGpxHint(
+            `GPX starts at ${formatGpxTime(gpxStart)} but VID_* implies ${formatGpxTime(fromName)}. Street View uses the MP4 creation_time — drop the .mp4 below (or keep GPX / paste the time). Aligning only to the filename often fails after Insta360 re-export.`,
+          )
+          return
+        }
+      }
+      setVidVsGpxHint(null)
+    } catch {
+      setVidVsGpxHint(null)
+    }
+  }
+
+  async function handleGpxFile(file: File) {
     setBusy(true)
     setError(null)
     setResult(null)
@@ -98,21 +225,142 @@ export default function App() {
     setFileName(file.name)
     try {
       const xml = await file.text()
-      const wall = parseVidLocalParts(file.name)
-      const offsetN = wall
-        ? utcOffsetHoursForWallClock(timeZone, wall)
-        : utcOffsetHoursAt(timeZone, new Date())
-      const videoStartUtc =
-        startOverride.trim().length > 0 ? new Date(startOverride.trim()) : null
-      if (videoStartUtc && Number.isNaN(videoStartUtc.getTime())) {
-        throw new Error('Invalid start time. Use ISO UTC, e.g. 2025-11-17T08:48:32Z')
+      setGpxXml(xml)
+      refreshVidVsGpxHint(xml, file.name)
+
+      // Prefer MP4 when already loaded; otherwise if GPX ≠ VID_* by ≥1h, keep GPX.
+      let nextMode = syncMode
+      if (mp4CreationUtc) {
+        nextMode = 'mp4'
+      } else {
+        const parsed = parseGpx(xml)
+        const wall = parseVidLocalParts(file.name)
+        const offsetN = wall
+          ? utcOffsetHoursForWallClock(timeZone, wall)
+          : utcOffsetHoursAt(timeZone, new Date())
+        const fromName = inferVideoStartFromFilename(
+          file.name,
+          Number.isFinite(offsetN) ? offsetN : -3,
+        )
+        const gpxStart = parsed.points[0]?.time
+        if (
+          fromName &&
+          gpxStart &&
+          Math.abs(gpxStart.getTime() - fromName.getTime()) >= 3_600_000
+        ) {
+          nextMode = 'gpx'
+        }
       }
-      const fixed = fixGpx(xml, {
-        sourceFilename: file.name,
-        utcOffsetHours: Number.isFinite(offsetN) ? offsetN : -3,
-        videoStartUtc,
-      })
-      setResult(fixed)
+      setSyncMode(nextMode)
+
+      const { syncSource, videoStartUtc, videoStartLabel, utcOffsetHours } =
+        (() => {
+          const wall = parseVidLocalParts(file.name)
+          const offsetN = wall
+            ? utcOffsetHoursForWallClock(timeZone, wall)
+            : utcOffsetHoursAt(timeZone, new Date())
+          const utcOffsetHours = Number.isFinite(offsetN) ? offsetN : -3
+          if (nextMode === 'mp4' && mp4CreationUtc) {
+            return {
+              syncSource: 'mp4' as const,
+              videoStartUtc: mp4CreationUtc,
+              videoStartLabel: 'MP4 creation_time',
+              utcOffsetHours,
+            }
+          }
+          if (nextMode === 'gpx') {
+            return {
+              syncSource: 'gpx' as const,
+              videoStartUtc: null,
+              videoStartLabel: null,
+              utcOffsetHours,
+            }
+          }
+          if (nextMode === 'manual') {
+            const raw = manualStart.trim()
+            const d = raw ? new Date(raw) : null
+            if (!d || Number.isNaN(d.getTime())) {
+              throw new Error(
+                'Enter the MP4 creation_time as ISO UTC, e.g. 2026-09-14T17:11:54Z',
+              )
+            }
+            return {
+              syncSource: 'manual' as const,
+              videoStartUtc: d,
+              videoStartLabel: 'manual video start',
+              utcOffsetHours,
+            }
+          }
+          return {
+            syncSource: 'filename' as const,
+            videoStartUtc: null,
+            videoStartLabel: null,
+            utcOffsetHours,
+          }
+        })()
+
+      setResult(
+        fixGpx(xml, {
+          sourceFilename: file.name,
+          utcOffsetHours,
+          syncSource,
+          videoStartUtc,
+          videoStartLabel,
+        }),
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleMp4File(file: File) {
+    setBusy(true)
+    setError(null)
+    setMp4Name(file.name)
+    try {
+      const created = await readMp4CreationTime(file)
+      if (!created) {
+        setMp4CreationUtc(null)
+        setSyncMode('manual')
+        throw new Error(
+          'Could not read creation_time from that MP4. Paste it manually (ffprobe format.tags.creation_time).',
+        )
+      }
+      setMp4CreationUtc(created)
+      setManualStart(formatMp4CreationTimeUtc(created))
+      setSyncMode('mp4')
+      if (gpxXml && fileName) {
+        setResult(
+          fixGpx(gpxXml, {
+            sourceFilename: fileName,
+            utcOffsetHours: (() => {
+              const wall = parseVidLocalParts(fileName)
+              const offsetN = wall
+                ? utcOffsetHoursForWallClock(timeZone, wall)
+                : utcOffsetHoursAt(timeZone, new Date())
+              return Number.isFinite(offsetN) ? offsetN : -3
+            })(),
+            syncSource: 'mp4',
+            videoStartUtc: created,
+            videoStartLabel: 'MP4 creation_time',
+          }),
+        )
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function reprocess() {
+    if (!gpxXml || !fileName) return
+    setBusy(true)
+    setError(null)
+    try {
+      runFix(gpxXml, fileName)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -137,8 +385,9 @@ export default function App() {
         <p className="brand">GPX Street View Fixer</p>
         <h1>Get your track ready for Google Street View</h1>
         <p className="lede">
-          Fixes Insta360 bounds, aligns time with the VID_* video, and keeps 1
-          point per second — what Street View Studio usually needs to approve.
+          Fixes Insta360 bounds, keeps 1 point per second, and aligns GPS time to
+          the <strong>MP4 creation_time</strong> Street View actually checks —
+          which often differs from the <code>VID_*</code> filename after re-export.
         </p>
       </header>
 
@@ -152,37 +401,138 @@ export default function App() {
               disabled={busy}
               onChange={(e) => {
                 const f = e.target.files?.[0]
-                if (f) void handleFile(f)
+                if (f) void handleGpxFile(f)
               }}
             />
             <span className="drop-title">
               {busy ? 'Processing…' : 'Drop or choose a .gpx'}
             </span>
             <span className="drop-sub">
-              Ideal: VID_YYYYMMDD_HHMMSS name (camera local time)
+              Ideal: same clip as the 360 MP4 you will upload
             </span>
           </label>
+
+          <label className="drop drop-mp4" htmlFor="mp4-file">
+            <input
+              id="mp4-file"
+              type="file"
+              accept="video/mp4,video/quicktime,.mp4,.mov"
+              disabled={busy}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void handleMp4File(f)
+              }}
+            />
+            <span className="drop-title">
+              {mp4CreationUtc
+                ? `MP4 time: ${formatMp4CreationTimeUtc(mp4CreationUtc)}`
+                : 'Optional: matching .mp4'}
+            </span>
+            <span className="drop-sub">
+              Reads <code>creation_time</code> only (head/tail — safe for large exports).
+              {mp4Name ? ` · ${mp4Name}` : ''}
+            </span>
+          </label>
+
+          {vidVsGpxHint && <p className="sync-banner">{vidVsGpxHint}</p>}
 
           <div className="controls">
             <div className="field">
               <span className="field-label">Camera time zone</span>
               <TimezonePicker value={timeZone} onChange={setTimeZone} disabled={busy} />
               <span className="field-hint">
-                Local time in the <code>VID_*</code> name. Daylight saving follows the clip date.
+                Used only when syncing from the <code>VID_*</code> name.
               </span>
             </div>
-            <label>
-              Video start UTC (optional)
-              <input
-                type="text"
-                placeholder="2025-11-17T08:48:32Z"
-                value={startOverride}
-                onChange={(e) => setStartOverride(e.target.value)}
-              />
-            </label>
+
+            <fieldset className="field sync-field">
+              <legend className="field-label">Align GPS to</legend>
+              <div className="sync-options">
+                <label className="sync-option">
+                  <input
+                    type="radio"
+                    name="sync"
+                    checked={syncMode === 'mp4'}
+                    disabled={busy || !mp4CreationUtc}
+                    onChange={() => setSyncMode('mp4')}
+                  />
+                  <span>
+                    MP4 creation_time
+                    {mp4CreationUtc
+                      ? ` (${formatMp4CreationTimeUtc(mp4CreationUtc)})`
+                      : ' — add .mp4 above'}
+                  </span>
+                </label>
+                <label className="sync-option">
+                  <input
+                    type="radio"
+                    name="sync"
+                    checked={syncMode === 'gpx'}
+                    disabled={busy}
+                    onChange={() => setSyncMode('gpx')}
+                  />
+                  <span>Keep GPX timestamps (Insta360 export)</span>
+                </label>
+                <label className="sync-option">
+                  <input
+                    type="radio"
+                    name="sync"
+                    checked={syncMode === 'filename'}
+                    disabled={busy}
+                    onChange={() => setSyncMode('filename')}
+                  />
+                  <span>
+                    VID_* filename
+                    {filenameStartPreview
+                      ? ` (${formatGpxTime(filenameStartPreview)})`
+                      : ''}
+                  </span>
+                </label>
+                <label className="sync-option">
+                  <input
+                    type="radio"
+                    name="sync"
+                    checked={syncMode === 'manual'}
+                    disabled={busy}
+                    onChange={() => setSyncMode('manual')}
+                  />
+                  <span>Manual UTC start</span>
+                </label>
+              </div>
+              {(syncMode === 'manual' || syncMode === 'mp4') && (
+                <label className="manual-start">
+                  Video start UTC
+                  <input
+                    type="text"
+                    placeholder="2026-09-14T17:11:54Z"
+                    value={manualStart}
+                    disabled={busy || syncMode === 'mp4'}
+                    onChange={(e) => {
+                      setManualStart(e.target.value)
+                      if (syncMode !== 'manual') setSyncMode('manual')
+                    }}
+                  />
+                </label>
+              )}
+              <span className="field-hint">
+                Google rejects uploads when GPS and video ranges do not overlap.
+                Prefer the MP4 whenever the export date disagrees with <code>VID_*</code>.
+              </span>
+            </fieldset>
           </div>
 
-          {fileName && <p className="file-name">File: {fileName}</p>}
+          {gpxXml && fileName && (
+            <button
+              type="button"
+              className="cta cta-secondary"
+              disabled={busy}
+              onClick={reprocess}
+            >
+              Reprocess with current sync
+            </button>
+          )}
+
+          {fileName && <p className="file-name">GPX: {fileName}</p>}
           {error && <p className="error">{error}</p>}
         </section>
 
@@ -204,6 +554,12 @@ export default function App() {
                   </dd>
                 </div>
               </dl>
+              <p className="mono subtle">
+                Sync: {result.syncSource}
+                {result.videoStartUtc
+                  ? ` → ${formatGpxTime(result.videoStartUtc)}`
+                  : ''}
+              </p>
               <ol>
                 {result.applied.map((line) => (
                   <li key={line}>{line}</li>
@@ -275,14 +631,14 @@ export default function App() {
               Export the GPX from Insta360 Studio together with the 360 MP4 of the same clip.
             </li>
             <li>
-              Keep the <code>VID_YYYYMMDD_HHMMSS</code> prefix (camera local time) and
-              set the camera time zone above. Continental Chile is Santiago.
+              Drop the <code>.gpx</code> here. If the times disagree with{' '}
+              <code>VID_*</code>, also drop the <code>.mp4</code> (or choose
+              “Keep GPX timestamps”).
             </li>
             <li>
-              Here in the web app, or via terminal:
+              Or via terminal, force the MP4 time:
               <pre>
-                {`npm install
-npm run fix -- ./path/VID_20251117_054832_00_003.gpx`}
+                {`npm run fix -- ./clip.gpx --start 2026-09-14T17:11:54Z`}
               </pre>
             </li>
             <li>
@@ -298,9 +654,8 @@ npm run fix -- ./path/VID_20251117_054832_00_003.gpx`}
             </li>
           </ol>
           <p className="subtle">
-            Analysis only: <code>npm run analyze -- file.gpx</code>. If the MP4
-            time does not match the name, force UTC with{' '}
-            <code>--start 2025-11-17T08:48:32Z</code>.
+            Street View compares GPS range to the MP4 <code>creation_time</code>,
+            not the camera filename. After a Studio re-export those often diverge.
           </p>
         </section>
       </main>
