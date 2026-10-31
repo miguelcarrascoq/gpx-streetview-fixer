@@ -24,6 +24,12 @@ export type GpxIssue = {
   message: string
 }
 
+export type ProblemSegment = {
+  kind: 'gap' | 'speed' | 'dup-time'
+  /** Polyline (gap/speed) or a single point (dup-time). */
+  coords: { lat: number; lon: number }[]
+}
+
 export type GpxAnalysis = {
   pointCount: number
   durationSeconds: number
@@ -44,6 +50,8 @@ export type GpxAnalysis = {
   maxSpeedKmh: number
   distanceKm: number
   issues: GpxIssue[]
+  track: { lat: number; lon: number }[]
+  problems: ProblemSegment[]
 }
 
 export type FixOptions = {
@@ -256,9 +264,13 @@ export function analyzeTrack(
       maxSpeedKmh: 0,
       distanceKm: 0,
       issues,
+      track: [],
+      problems: [],
     }
   }
 
+  const track = points.map((p) => ({ lat: p.lat, lon: p.lon }))
+  const problems: ProblemSegment[] = []
   const lats = points.map((p) => p.lat)
   const lons = points.map((p) => p.lon)
   const latMin = Math.min(...lats)
@@ -272,31 +284,62 @@ export function analyzeTrack(
   let gapsOver5s = 0
   let maxGapSeconds = 0
   let nonMonotonic = 0
-  const secCounts = new Map<number, number>()
+  const secBuckets = new Map<number, TrackPoint[]>()
   let distanceM = 0
   let maxSpeedKmh = 0
 
   for (let i = 0; i < points.length; i++) {
     const sec = Math.floor(points[i].time.getTime() / 1000)
-    secCounts.set(sec, (secCounts.get(sec) ?? 0) + 1)
+    const bucket = secBuckets.get(sec)
+    if (bucket) bucket.push(points[i])
+    else secBuckets.set(sec, [points[i]])
     if (i === 0) continue
-    const dt = (points[i].time.getTime() - points[i - 1].time.getTime()) / 1000
+    const prev = points[i - 1]
+    const curr = points[i]
+    const dt = (curr.time.getTime() - prev.time.getTime()) / 1000
     if (dt < 0) nonMonotonic++
     if (dt > maxGapSeconds) maxGapSeconds = dt
-    if (dt > 5) gapsOver5s++
-    const dist = haversineM(points[i - 1], points[i])
+    if (dt > 5) {
+      gapsOver5s++
+      problems.push({
+        kind: 'gap',
+        coords: [
+          { lat: prev.lat, lon: prev.lon },
+          { lat: curr.lat, lon: curr.lon },
+        ],
+      })
+    }
+    const dist = haversineM(prev, curr)
     distanceM += dist
     if (dt > 0) {
       const kmh = (dist / dt) * 3.6
       if (kmh > maxSpeedKmh) maxSpeedKmh = kmh
+      if (kmh > 200) {
+        problems.push({
+          kind: 'speed',
+          coords: [
+            { lat: prev.lat, lon: prev.lon },
+            { lat: curr.lat, lon: curr.lon },
+          ],
+        })
+      }
     }
   }
 
   let duplicateTimestamps = 0
   let maxPointsPerTimestamp = 0
-  for (const c of secCounts.values()) {
+  for (const bucket of secBuckets.values()) {
+    const c = bucket.length
     if (c > maxPointsPerTimestamp) maxPointsPerTimestamp = c
-    if (c > 1) duplicateTimestamps += c - 1
+    if (c > 1) {
+      duplicateTimestamps += c - 1
+      // One map marker per second (points in the same second are near-identical).
+      const p = bucket[0]
+      problems.push({
+        kind: 'dup-time',
+        coords: [{ lat: p.lat, lon: p.lon }],
+      })
+    }
   }
 
   let boundsMismatch = false
@@ -416,6 +459,8 @@ export function analyzeTrack(
     maxSpeedKmh,
     distanceKm: distanceM / 1000,
     issues,
+    track,
+    problems,
   }
 }
 

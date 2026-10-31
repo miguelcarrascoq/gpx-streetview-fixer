@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import TimezonePicker from './components/TimezonePicker'
+import TrackMap from './components/TrackMap'
 import {
   fixGpx,
   formatGpxTime,
@@ -77,16 +78,23 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [startOverride, setStartOverride] = useState('')
   const [timeZone, setTimeZone] = useState(DEFAULT_TIME_ZONE)
+  const [mapWhich, setMapWhich] = useState<'before' | 'after'>('before')
 
   const errorCount = useMemo(
     () => result?.analysisAfter.issues.filter((i) => i.severity === 'error').length ?? 0,
     [result],
   )
 
+  const mapAnalysis = useMemo(() => {
+    if (!result) return null
+    return mapWhich === 'before' ? result.analysisBefore : result.analysisAfter
+  }, [result, mapWhich])
+
   async function handleFile(file: File) {
     setBusy(true)
     setError(null)
     setResult(null)
+    setMapWhich('before')
     setFileName(file.name)
     try {
       const xml = await file.text()
@@ -214,6 +222,44 @@ export default function App() {
                 </p>
               )}
             </section>
+
+            {mapAnalysis && (
+              <section className="card map-card">
+                <div className="map-header">
+                  <h2>Track map</h2>
+                  <div className="map-toggle" role="group" aria-label="Map version">
+                    <button
+                      type="button"
+                      className={mapWhich === 'before' ? 'active' : undefined}
+                      onClick={() => setMapWhich('before')}
+                    >
+                      Before
+                    </button>
+                    <button
+                      type="button"
+                      className={mapWhich === 'after' ? 'active' : undefined}
+                      onClick={() => setMapWhich('after')}
+                    >
+                      After
+                    </button>
+                  </div>
+                </div>
+                <div className="map-wrap">
+                  <TrackMap analysis={mapAnalysis} />
+                </div>
+                <ul className="map-legend">
+                  <li>
+                    <span className="swatch track" /> Track
+                  </li>
+                  <li>
+                    <span className="swatch gap" /> Gap / speed jump
+                  </li>
+                  <li>
+                    <span className="swatch dup" /> Duplicate time
+                  </li>
+                </ul>
+              </section>
+            )}
 
             <div className="grid">
               <AnalysisCard title="Before" result={result} which="before" />
