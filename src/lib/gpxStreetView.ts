@@ -1,14 +1,14 @@
 /**
- * Análisis y corrección de GPX para Google Street View Studio.
+ * Analyze and fix GPX for Google Street View Studio.
  *
- * Correcciones aplicadas:
- * 1. Recalcular <bounds> desde los trackpoints reales (Insta360 a menudo
- *    exporta signos positivos en hemisferio sur / oeste).
- * 2. Alinear el inicio del track con la hora del video (nombre VID_YYYYMMDD_HHMMSS
- *    interpretado en America/Santiago → UTC), para que GPS y video se solapen.
- * 3. Reducir a 1 punto por segundo (Google rechaza varios puntos con el mismo
- *    timestamp e interpreta saltos imposibles).
- * 4. Garantizar timestamps estrictamente crecientes y cobertura sin gaps > 5 s.
+ * Fixes applied:
+ * 1. Recalculate <bounds> from real trackpoints (Insta360 often
+ *    exports positive signs in southern / western hemisphere).
+ * 2. Align track start with video time (VID_YYYYMMDD_HHMMSS name
+ *    interpreted in America/Santiago → UTC), so GPS and video overlap.
+ * 3. Downsample to 1 point per second (Google rejects multiple points with
+ *    the same timestamp and interprets impossible jumps).
+ * 4. Ensure strictly increasing timestamps and coverage without gaps > 5 s.
  */
 
 export type TrackPoint = {
@@ -47,11 +47,11 @@ export type GpxAnalysis = {
 }
 
 export type FixOptions = {
-  /** Hora de inicio UTC del video. Si no se pasa, se infiere del nombre VID_*. */
+  /** Video start time in UTC. If omitted, inferred from VID_* filename. */
   videoStartUtc?: Date | null
-  /** Offset UTC de la cámara al interpretar VID_* (Chile continental = -3). */
+  /** Camera UTC offset when interpreting VID_* (continental Chile = -3). */
   utcOffsetHours?: number
-  /** Conservar solo 1 punto por segundo. Default true. */
+  /** Keep only 1 point per second. Default true. */
   downsampleTo1Hz?: boolean
   sourceFilename?: string
 }
@@ -90,8 +90,8 @@ export function parseVidLocalParts(filename: string): {
 }
 
 /**
- * Convierte componentes de fecha/hora "locales" a UTC con offset fijo
- * (America/Santiago ≈ UTC-3 todo el año desde 2019).
+ * Convert "local" date/time components to UTC with a fixed offset
+ * (America/Santiago ≈ UTC-3 year-round since 2019).
  */
 export function localPartsToUtc(
   parts: { y: number; mo: number; d: number; h: number; mi: number; s: number },
@@ -155,7 +155,7 @@ export function parseGpx(xml: string): {
   creator: string
 } {
   if (!/<gpx\b/i.test(xml)) {
-    throw new Error('No parece un archivo GPX válido (falta <gpx>).')
+    throw new Error('Does not look like a valid GPX file (missing <gpx>).')
   }
 
   const gpxOpen = xml.match(/<gpx\b[^>]*>/i)?.[0] ?? ''
@@ -223,7 +223,7 @@ export function analyzeTrack(
     issues.push({
       id: 'empty',
       severity: 'error',
-      message: 'No hay trackpoints con lat/lon/time válidos.',
+      message: 'No trackpoints with valid lat/lon/time.',
     })
     return {
       pointCount: 0,
@@ -301,7 +301,7 @@ export function analyzeTrack(
       issues.push({
         id: 'bounds',
         severity: 'error',
-        message: `Los <bounds> del metadata (${b.minlat}, ${b.minlon} … ${b.maxlat}, ${b.maxlon}) no contienen la pista real (${latMin}, ${lonMin} … ${latMax}, ${lonMax}). Típico bug de Insta360 con signos omitidos.`,
+        message: `Metadata <bounds> (${b.minlat}, ${b.minlon} … ${b.maxlat}, ${b.maxlon}) do not contain the real track (${latMin}, ${lonMin} … ${latMax}, ${lonMax}). Typical Insta360 bug with omitted signs.`,
       })
     }
   }
@@ -310,7 +310,7 @@ export function analyzeTrack(
     issues.push({
       id: 'dup-time',
       severity: 'error',
-      message: `${duplicateTimestamps} puntos comparten timestamp con otro (hasta ${maxPointsPerTimestamp}/s). Street View puede rechazar saltos “imposibles”. Se recomienda 1 Hz.`,
+      message: `${duplicateTimestamps} points share a timestamp with another (up to ${maxPointsPerTimestamp}/s). Street View may reject “impossible” jumps. 1 Hz recommended.`,
     })
   }
 
@@ -318,7 +318,7 @@ export function analyzeTrack(
     issues.push({
       id: 'gaps',
       severity: 'warn',
-      message: `${gapsOver5s} gaps > 5 s (máx ${maxGapSeconds.toFixed(1)} s). Google recomienda samples sin huecos mayores a 5 s.`,
+      message: `${gapsOver5s} gaps > 5 s (max ${maxGapSeconds.toFixed(1)} s). Google recommends samples without gaps larger than 5 s.`,
     })
   }
 
@@ -326,7 +326,7 @@ export function analyzeTrack(
     issues.push({
       id: 'order',
       severity: 'error',
-      message: `${nonMonotonic} timestamps no monótonos.`,
+      message: `${nonMonotonic} non-monotonic timestamps.`,
     })
   }
 
@@ -334,7 +334,7 @@ export function analyzeTrack(
     issues.push({
       id: 'speed',
       severity: 'warn',
-      message: `Velocidad pico ${maxSpeedKmh.toFixed(1)} km/h — posible salto GPS.`,
+      message: `Peak speed ${maxSpeedKmh.toFixed(1)} km/h — possible GPS jump.`,
     })
   }
 
@@ -342,14 +342,14 @@ export function analyzeTrack(
     issues.push({
       id: 'short',
       severity: 'warn',
-      message: `Duración ${durationSeconds.toFixed(0)} s (< 2 min recomendados por Google).`,
+      message: `Duration ${durationSeconds.toFixed(0)} s (< 2 min recommended by Google).`,
     })
   }
   if (durationSeconds > 3600) {
     issues.push({
       id: 'long',
       severity: 'warn',
-      message: `Duración ${(durationSeconds / 60).toFixed(0)} min (> 60 min recomendados).`,
+      message: `Duration ${(durationSeconds / 60).toFixed(0)} min (> 60 min recommended).`,
     })
   }
 
@@ -365,7 +365,7 @@ export function analyzeTrack(
       issues.push({
         id: 'video-sync',
         severity: 'error',
-        message: `Inicio GPX (${formatGpxTime(timeStart)}) no coincide con el video del nombre (${formatGpxTime(videoStartFromFilename)} America/Santiago→UTC). Desfase ${timeOffsetSecondsVsFilename.toFixed(0)} s. Street View fallará si el MP4 usa la hora del archivo.`,
+        message: `GPX start (${formatGpxTime(timeStart)}) does not match video from filename (${formatGpxTime(videoStartFromFilename)} America/Santiago→UTC). Offset ${timeOffsetSecondsVsFilename.toFixed(0)} s. Street View will fail if the MP4 uses the file time.`,
       })
     }
   } else if (opts.sourceFilename) {
@@ -373,7 +373,7 @@ export function analyzeTrack(
       id: 'no-vid-name',
       severity: 'info',
       message:
-        'No se pudo inferir hora del video desde el nombre (se espera VID_YYYYMMDD_HHMMSS).',
+        'Could not infer video time from filename (expected VID_YYYYMMDD_HHMMSS).',
     })
   }
 
@@ -381,7 +381,7 @@ export function analyzeTrack(
     issues.push({
       id: 'ok',
       severity: 'info',
-      message: 'Sin problemas detectados para Street View.',
+      message: 'No Street View issues detected.',
     })
   }
 
@@ -408,7 +408,7 @@ export function analyzeTrack(
   }
 }
 
-/** Un punto por segundo civil (UTC floor). Conserva el primero de cada segundo. */
+/** One point per civil second (UTC floor). Keeps the first of each second. */
 export function downsampleTo1Hz(points: TrackPoint[]): TrackPoint[] {
   const out: TrackPoint[] = []
   let lastSec = Number.NaN
@@ -438,7 +438,7 @@ export function buildGpxXml(
   meta: { trackName?: string; creator?: string },
 ): string {
   if (points.length === 0) {
-    throw new Error('No se puede escribir un GPX sin puntos.')
+    throw new Error('Cannot write a GPX with no points.')
   }
   const latMin = Math.min(...points.map((p) => p.lat))
   const latMax = Math.max(...points.map((p) => p.lat))
@@ -493,7 +493,7 @@ export function fixGpx(xml: string, options: FixOptions = {}): FixResult {
     const before = points.length
     points = downsampleTo1Hz(points)
     applied.push(
-      `Downsample a 1 Hz: ${before} → ${points.length} puntos (evita timestamps duplicados).`,
+      `Downsample to 1 Hz: ${before} → ${points.length} points (avoids duplicate timestamps).`,
     )
   }
 
@@ -508,19 +508,19 @@ export function fixGpx(xml: string, options: FixOptions = {}): FixResult {
     points = shiftToVideoStart(points, videoStart)
     if (before.getTime() !== points[0].time.getTime()) {
       applied.push(
-        `Alineación temporal al video: ${formatGpxTime(before)} → ${formatGpxTime(points[0].time)} (VID_* en UTC${utcOffsetHours >= 0 ? '+' : ''}${utcOffsetHours} → UTC).`,
+        `Time aligned to video: ${formatGpxTime(before)} → ${formatGpxTime(points[0].time)} (VID_* at UTC${utcOffsetHours >= 0 ? '+' : ''}${utcOffsetHours} → UTC).`,
       )
     } else {
-      applied.push('Timestamps ya alineados con el video del nombre.')
+      applied.push('Timestamps already aligned with video from filename.')
     }
   } else {
     applied.push(
-      'Sin hora de video inferida: se conservan timestamps del GPX (usa nombre VID_* o --start).',
+      'No video time inferred: keeping GPX timestamps (use VID_* name or --start).',
     )
   }
 
   applied.push(
-    'Bounds recalculados desde trackpoints reales (corrige signos omitidos de Insta360).',
+    'Bounds recalculated from real trackpoints (fixes omitted Insta360 signs).',
   )
 
   const gpxXml = buildGpxXml(points, {

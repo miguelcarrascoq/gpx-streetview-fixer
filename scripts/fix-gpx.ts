@@ -1,13 +1,13 @@
 #!/usr/bin/env npx tsx
 /**
- * CLI: analiza y corrige GPX para Google Street View.
+ * CLI: analyze and fix GPX for Google Street View.
  *
- * Uso:
- *   npm run fix -- ruta/al/archivo.gpx
- *   npm run fix -- ruta/al/archivo.gpx --out salida.gpx
- *   npm run analyze -- ruta/al/archivo.gpx
- *   npm run fix -- archivo.gpx --start 2025-11-17T08:48:32Z
- *   npm run fix -- archivo.gpx --offset -3
+ * Usage:
+ *   npm run fix -- path/to/file.gpx
+ *   npm run fix -- path/to/file.gpx --out output.gpx
+ *   npm run analyze -- path/to/file.gpx
+ *   npm run fix -- file.gpx --start 2025-11-17T08:48:32Z
+ *   npm run fix -- file.gpx --offset -3
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -20,23 +20,23 @@ import {
 } from '../src/lib/gpxStreetView.ts'
 
 function printHelp(): void {
-  console.log(`Uso:
-  npm run fix -- <archivo.gpx> [opciones]
-  npm run analyze -- <archivo.gpx>
+  console.log(`Usage:
+  npm run fix -- <file.gpx> [options]
+  npm run analyze -- <file.gpx>
 
-Opciones:
-  --out <ruta>          Archivo de salida (default: <nombre>_streetview.gpx)
-  --start <ISO-UTC>     Inicio del video en UTC (ej. 2025-11-17T08:48:32Z)
-  --offset <horas>      Offset de la cámara al leer VID_* (default: -3, Chile)
-  --keep-hz             No reducir a 1 punto/segundo
-  --analyze-only        Solo informe, no escribe archivo
-  -h, --help            Esta ayuda
+Options:
+  --out <path>          Output file (default: <name>_streetview.gpx)
+  --start <ISO-UTC>     Video start in UTC (e.g. 2025-11-17T08:48:32Z)
+  --offset <hours>      Camera offset when reading VID_* (default: -3, Chile)
+  --keep-hz             Do not downsample to 1 point/second
+  --analyze-only        Report only, do not write a file
+  -h, --help            Show this help
 
-Flujo recomendado (Insta360 → Street View Studio):
-  1. Exporta el GPX desde Insta360 Studio (mismo clip que el MP4 360).
-  2. Conserva el prefijo VID_YYYYMMDD_HHMMSS en el nombre del .gpx.
-  3. npm run fix -- ./mis-clips/VID_....gpx
-  4. Sube el MP4 + el *_streetview.gpx en https://streetviewstudio.maps.google.com/
+Recommended flow (Insta360 → Street View Studio):
+  1. Export the GPX from Insta360 Studio (same clip as the 360 MP4).
+  2. Keep the VID_YYYYMMDD_HHMMSS prefix in the .gpx filename.
+  3. npm run fix -- ./my-clips/VID_....gpx
+  4. Upload the MP4 + the *_streetview.gpx at https://streetviewstudio.maps.google.com/
 `)
 }
 
@@ -61,7 +61,7 @@ function parseArgs(argv: string[]) {
     else if (a === '--keep-hz') opts.keepHz = true
     else if (a === '--analyze-only') opts.analyzeOnly = true
     else if (a.startsWith('-')) {
-      console.error(`Opción desconocida: ${a}`)
+      console.error(`Unknown option: ${a}`)
       opts.help = true
     } else opts.file = a
   }
@@ -70,25 +70,25 @@ function parseArgs(argv: string[]) {
 
 function printAnalysis(title: string, a: ReturnType<typeof analyzeTrack>): void {
   console.log(`\n=== ${title} ===`)
-  console.log(`Puntos: ${a.pointCount}`)
+  console.log(`Points: ${a.pointCount}`)
   console.log(
-    `Duración: ${a.durationSeconds.toFixed(0)} s | Distancia: ${a.distanceKm.toFixed(3)} km | Vmax: ${a.maxSpeedKmh.toFixed(1)} km/h`,
+    `Duration: ${a.durationSeconds.toFixed(0)} s | Distance: ${a.distanceKm.toFixed(3)} km | Max speed: ${a.maxSpeedKmh.toFixed(1)} km/h`,
   )
   if (a.timeStart && a.timeEnd) {
-    console.log(`Tiempo: ${formatGpxTime(a.timeStart)} → ${formatGpxTime(a.timeEnd)}`)
+    console.log(`Time: ${formatGpxTime(a.timeStart)} → ${formatGpxTime(a.timeEnd)}`)
   }
   console.log(
     `Bbox: lat [${a.latMin}, ${a.latMax}] lon [${a.lonMin}, ${a.lonMax}]`,
   )
   console.log(
-    `Duplicados de segundo: ${a.duplicateTimestamps} (máx ${a.maxPointsPerTimestamp}/s) | Gaps >5s: ${a.gapsOver5s}`,
+    `Duplicate seconds: ${a.duplicateTimestamps} (max ${a.maxPointsPerTimestamp}/s) | Gaps >5s: ${a.gapsOver5s}`,
   )
   if (a.videoStartFromFilename) {
     console.log(
-      `Video (desde nombre): ${formatGpxTime(a.videoStartFromFilename)} | desfase: ${a.timeOffsetSecondsVsFilename?.toFixed(0)} s`,
+      `Video (from filename): ${formatGpxTime(a.videoStartFromFilename)} | offset: ${a.timeOffsetSecondsVsFilename?.toFixed(0)} s`,
     )
   }
-  console.log('Hallazgos:')
+  console.log('Findings:')
   for (const issue of a.issues) {
     const tag = issue.severity.toUpperCase().padEnd(5)
     console.log(`  [${tag}] ${issue.message}`)
@@ -113,14 +113,14 @@ async function main() {
       sourceFilename: filename,
       utcOffsetHours: opts.offset,
     })
-    printAnalysis(`Análisis: ${filename}`, analysis)
+    printAnalysis(`Analysis: ${filename}`, analysis)
     const hasError = analysis.issues.some((i) => i.severity === 'error')
     process.exit(hasError ? 2 : 0)
   }
 
   const videoStartUtc = opts.start ? new Date(opts.start) : null
   if (opts.start && Number.isNaN(videoStartUtc!.getTime())) {
-    console.error(`--start inválido: ${opts.start}`)
+    console.error(`Invalid --start: ${opts.start}`)
     process.exit(1)
   }
 
@@ -131,17 +131,17 @@ async function main() {
     videoStartUtc,
   })
 
-  printAnalysis('Antes', result.analysisBefore)
-  console.log('\nCorrecciones aplicadas:')
+  printAnalysis('Before', result.analysisBefore)
+  console.log('\nFixes applied:')
   for (const line of result.applied) console.log(`  • ${line}`)
-  printAnalysis('Después', result.analysisAfter)
+  printAnalysis('After', result.analysisAfter)
 
   const outPath = path.resolve(
     opts.out ?? path.join(path.dirname(abs), result.outputFilename),
   )
   await mkdir(path.dirname(outPath), { recursive: true })
   await writeFile(outPath, result.gpxXml, 'utf8')
-  console.log(`\nEscrito: ${outPath}`)
+  console.log(`\nWrote: ${outPath}`)
 }
 
 const isMain =

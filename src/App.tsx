@@ -26,19 +26,19 @@ function AnalysisCard({
       <h2>{title}</h2>
       <dl className="stats">
         <div>
-          <dt>Puntos</dt>
-          <dd>{a.pointCount.toLocaleString('es-CL')}</dd>
+          <dt>Points</dt>
+          <dd>{a.pointCount.toLocaleString('en-US')}</dd>
         </div>
         <div>
-          <dt>Duración</dt>
+          <dt>Duration</dt>
           <dd>{Math.round(a.durationSeconds)} s</dd>
         </div>
         <div>
-          <dt>Distancia</dt>
+          <dt>Distance</dt>
           <dd>{a.distanceKm.toFixed(2)} km</dd>
         </div>
         <div>
-          <dt>Vmáx</dt>
+          <dt>Max speed</dt>
           <dd>{a.maxSpeedKmh.toFixed(1)} km/h</dd>
         </div>
       </dl>
@@ -87,7 +87,7 @@ export default function App() {
       const videoStartUtc =
         startOverride.trim().length > 0 ? new Date(startOverride.trim()) : null
       if (videoStartUtc && Number.isNaN(videoStartUtc.getTime())) {
-        throw new Error('Hora de inicio inválida. Usa ISO UTC, ej. 2025-11-17T08:48:32Z')
+        throw new Error('Invalid start time. Use ISO UTC, e.g. 2025-11-17T08:48:32Z')
       }
       const fixed = fixGpx(xml, {
         sourceFilename: file.name,
@@ -117,10 +117,10 @@ export default function App() {
     <div className="page">
       <header className="hero">
         <p className="brand">GPX Street View Fixer</p>
-        <h1>Deja tu track listo para Google Street View</h1>
+        <h1>Get your track ready for Google Street View</h1>
         <p className="lede">
-          Corrige bounds de Insta360, alinea la hora con el video VID_* y deja 1
-          punto por segundo — lo que Street View Studio suele exigir para aprobar.
+          Fixes Insta360 bounds, aligns time with the VID_* video, and keeps 1
+          point per second — what Street View Studio usually needs to approve.
         </p>
       </header>
 
@@ -138,16 +138,16 @@ export default function App() {
               }}
             />
             <span className="drop-title">
-              {busy ? 'Procesando…' : 'Suelta o elige un .gpx'}
+              {busy ? 'Processing…' : 'Drop or choose a .gpx'}
             </span>
             <span className="drop-sub">
-              Ideal: nombre VID_YYYYMMDD_HHMMSS (hora local de la cámara)
+              Ideal: VID_YYYYMMDD_HHMMSS name (camera local time)
             </span>
           </label>
 
           <div className="controls">
             <label>
-              Offset cámara (horas UTC)
+              Camera offset (UTC hours)
               <input
                 type="number"
                 step="1"
@@ -156,7 +156,7 @@ export default function App() {
               />
             </label>
             <label>
-              Inicio video UTC (opcional)
+              Video start UTC (optional)
               <input
                 type="text"
                 placeholder="2025-11-17T08:48:32Z"
@@ -166,59 +166,59 @@ export default function App() {
             </label>
           </div>
 
-          {fileName && <p className="file-name">Archivo: {fileName}</p>}
+          {fileName && <p className="file-name">File: {fileName}</p>}
           {error && <p className="error">{error}</p>}
         </section>
 
         {result && (
           <>
             <section className="card applied">
-              <h2>Correcciones aplicadas</h2>
+              <h2>Fixes applied</h2>
               <ol>
                 {result.applied.map((line) => (
                   <li key={line}>{line}</li>
                 ))}
               </ol>
               <button type="button" className="cta" onClick={download}>
-                Descargar {result.outputFilename}
+                Download {result.outputFilename}
               </button>
               {errorCount === 0 ? (
                 <p className="ok">
-                  Listo para subir el MP4 360 + este GPX en Street View Studio.
+                  Ready to upload the 360 MP4 + this GPX in Street View Studio.
                 </p>
               ) : (
                 <p className="warn">
-                  Aún hay {errorCount} problema(s). Revisa el informe “Después”.
+                  Still {errorCount} issue(s). Review the “After” report.
                 </p>
               )}
             </section>
 
             <div className="grid">
-              <AnalysisCard title="Antes" result={result} which="before" />
-              <AnalysisCard title="Después" result={result} which="after" />
+              <AnalysisCard title="Before" result={result} which="before" />
+              <AnalysisCard title="After" result={result} which="after" />
             </div>
           </>
         )}
 
         <section className="card howto">
-          <h2>Cómo procesar otros GPX</h2>
+          <h2>How to process other GPX files</h2>
           <ol>
             <li>
-              Exporta el GPX desde Insta360 Studio junto al MP4 360 del mismo clip.
+              Export the GPX from Insta360 Studio together with the 360 MP4 of the same clip.
             </li>
             <li>
-              Conserva el prefijo <code>VID_YYYYMMDD_HHMMSS</code> en el nombre (hora
-              local de la cámara; en Chile usamos UTC−3).
+              Keep the <code>VID_YYYYMMDD_HHMMSS</code> prefix in the name (camera
+              local time; for Chile we use UTC−3).
             </li>
             <li>
-              Aquí en la web, o por terminal:
+              Here in the web app, or via terminal:
               <pre>
                 {`npm install
-npm run fix -- ./ruta/VID_20251117_054832_00_003.gpx`}
+npm run fix -- ./path/VID_20251117_054832_00_003.gpx`}
               </pre>
             </li>
             <li>
-              Sube el video y el archivo <code>*_streetview.gpx</code> en{' '}
+              Upload the video and the <code>*_streetview.gpx</code> file in{' '}
               <a
                 href="https://streetviewstudio.maps.google.com/"
                 target="_blank"
@@ -230,8 +230,8 @@ npm run fix -- ./ruta/VID_20251117_054832_00_003.gpx`}
             </li>
           </ol>
           <p className="subtle">
-            Solo análisis: <code>npm run analyze -- archivo.gpx</code>. Si la hora del
-            MP4 no coincide con el nombre, fuerza UTC con{' '}
+            Analysis only: <code>npm run analyze -- file.gpx</code>. If the MP4
+            time does not match the name, force UTC with{' '}
             <code>--start 2025-11-17T08:48:32Z</code>.
           </p>
         </section>
