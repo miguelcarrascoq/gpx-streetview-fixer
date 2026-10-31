@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import TimezonePicker from './components/TimezonePicker'
-import TrackMap from './components/TrackMap'
+import TrackMap, { summarizeMapProblems } from './components/TrackMap'
 import {
   fixGpx,
   formatGpxTime,
@@ -108,6 +108,11 @@ export default function App() {
     if (!result) return null
     return mapWhich === 'before' ? result.analysisBefore : result.analysisAfter
   }, [result, mapWhich])
+
+  const mapSummary = useMemo(
+    () => (mapAnalysis ? summarizeMapProblems(mapAnalysis) : null),
+    [mapAnalysis],
+  )
 
   const filenameStartPreview = useMemo(() => {
     if (!fileName) return null
@@ -579,7 +584,7 @@ export default function App() {
               )}
             </section>
 
-            {mapAnalysis && (
+            {mapAnalysis && mapSummary && (
               <section className="card map-card">
                 <div className="map-header">
                   <h2>Track map</h2>
@@ -589,23 +594,51 @@ export default function App() {
                       className={mapWhich === 'before' ? 'active' : undefined}
                       onClick={() => setMapWhich('before')}
                     >
-                      Before
+                      <span className="map-toggle-title">Original</span>
+                      <span className="map-toggle-meta">
+                        {result.analysisBefore.pointCount.toLocaleString('en-US')} pts
+                        {' · '}
+                        {result.analysisBefore.problems.length === 0
+                          ? 'clean'
+                          : `${result.analysisBefore.problems.length.toLocaleString('en-US')} issues`}
+                      </span>
                     </button>
                     <button
                       type="button"
                       className={mapWhich === 'after' ? 'active' : undefined}
                       onClick={() => setMapWhich('after')}
                     >
-                      After
+                      <span className="map-toggle-title">Fixed</span>
+                      <span className="map-toggle-meta">
+                        {result.analysisAfter.pointCount.toLocaleString('en-US')} pts
+                        {' · '}
+                        {result.analysisAfter.problems.length === 0
+                          ? 'clean'
+                          : `${result.analysisAfter.problems.length.toLocaleString('en-US')} issues`}
+                      </span>
                     </button>
                   </div>
                 </div>
                 <div className="map-wrap">
                   <TrackMap analysis={mapAnalysis} />
                 </div>
+                <p
+                  className={
+                    mapSummary.gapCount + mapSummary.speedCount + mapSummary.dupCount === 0
+                      ? 'map-chip map-chip-ok'
+                      : mapSummary.denseOversample
+                        ? 'map-chip map-chip-warn'
+                        : 'map-chip map-chip-err'
+                  }
+                >
+                  {mapSummary.label}
+                </p>
                 <ul className="map-legend">
                   <li>
-                    <span className="swatch track" /> Track
+                    <span className="swatch track" /> Clean track
+                  </li>
+                  <li>
+                    <span className="swatch oversample" /> Oversampled track
                   </li>
                   <li>
                     <span className="swatch gap" /> Gap / speed jump

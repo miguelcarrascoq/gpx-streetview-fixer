@@ -1,17 +1,84 @@
-import { Component, useEffect, useRef, type ReactNode } from 'react'
+import {
+  Component,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { GpxAnalysis } from '../lib/gpxStreetView'
 
 const TRACK_COLOR = '#7eb8a4'
+const OVERSAMPLE_COLOR = '#e6b84d'
 const PROBLEM_COLOR = '#ef4444'
-/** Above this, draw dup-time as one polyline instead of many markers. */
+/** Sparse dup markers above this → treat as dense oversample. */
 const DUP_MARKER_LIMIT = 400
+/** Fraction of track duration seconds with dup-time → dense. */
+const DUP_DENSE_RATIO = 0.4
 /** Max vertices kept for the base track polyline. */
 const TRACK_DISPLAY_MAX = 4000
 
+type BasemapId = 'map' | 'topo' | 'satellite'
+
 type TrackMapProps = {
   analysis: GpxAnalysis
+}
+
+export type MapProblemSummary = {
+  gapCount: number
+  speedCount: number
+  dupCount: number
+  denseOversample: boolean
+  /** Short status line for the chip under the map. */
+  label: string
+}
+
+export function summarizeMapProblems(analysis: GpxAnalysis): MapProblemSummary {
+  let gapCount = 0
+  let speedCount = 0
+  let dupCount = 0
+  for (const p of analysis.problems) {
+    if (p.kind === 'gap') gapCount++
+    else if (p.kind === 'speed') speedCount++
+    else if (p.kind === 'dup-time') dupCount++
+  }
+
+  const durationSec = Math.max(1, Math.round(analysis.durationSeconds))
+  const denseOversample =
+    dupCount > DUP_MARKER_LIMIT || dupCount / durationSec >= DUP_DENSE_RATIO
+
+  if (gapCount + speedCount + dupCount === 0) {
+    return {
+      gapCount,
+      speedCount,
+      dupCount,
+      denseOversample: false,
+      label: 'No map issues',
+    }
+  }
+
+  const parts: string[] = []
+  if (denseOversample) {
+    parts.push(
+      `Oversampled along the track (${dupCount.toLocaleString('en-US')} duplicate seconds)`,
+    )
+  } else if (dupCount > 0) {
+    parts.push(`${dupCount.toLocaleString('en-US')} duplicate-time spots`)
+  }
+  if (gapCount > 0) parts.push(`${gapCount} gap${gapCount === 1 ? '' : 's'}`)
+  if (speedCount > 0) {
+    parts.push(`${speedCount} speed jump${speedCount === 1 ? '' : 's'}`)
+  }
+
+  return {
+    gapCount,
+    speedCount,
+    dupCount,
+    denseOversample,
+    label: parts.join(' · '),
+  }
 }
 
 function downsampleTrack(
@@ -37,12 +104,57 @@ function downsampleTrack(
   return out
 }
 
-function paintProblems(layer: L.LayerGroup, analysis: GpxAnalysis) {
-  const dups: L.LatLngExpression[] = []
+function paintAnalysis(
+  trackLayer: L.LayerGroup,
+  problemsLayer: L.LayerGroup,
+  analysis: GpxAnalysis,
+  summary: MapProblemSummary,
+) {
+  trackLayer.clearLayers()
+  problemsLayer.clearLayers()
+
+  if (analysis.track.length === 0) return
+
+  const latlngs = downsampleTrack(analysis.track, TRACK_DISPLAY_MAX)
+
+  if (summary.denseOversample) {
+    L.polyline(latlngs, {
+      color: OVERSAMPLE_COLOR,
+      weight: 4,
+      opacity: 0.9,
+      dashArray: '8 10',
+    }).addTo(trackLayer)
+
+    const idxs = [
+      0,
+      Math.floor(analysis.track.length / 2),
+      analysis.track.length - 1,
+    ]
+    for (const i of idxs) {
+      const p = analysis.track[i]
+      if (!p) continue
+      L.circleMarker([p.lat, p.lon], {
+        radius: 6,
+        color: PROBLEM_COLOR,
+        fillColor: OVERSAMPLE_COLOR,
+        fillOpacity: 0.95,
+        weight: 2,
+      }).addTo(problemsLayer)
+    }
+  } else {
+    L.polyline(latlngs, {
+      color: TRACK_COLOR,
+      weight: 3,
+      opacity: 0.85,
+    }).addTo(trackLayer)
+  }
+
+  const sparseDups: L.LatLngExpression[] = []
   for (const problem of analysis.problems) {
     if (problem.kind === 'dup-time') {
+      if (summary.denseOversample) continue
       const c = problem.coords[0]
-      if (c) dups.push([c.lat, c.lon])
+      if (c) sparseDups.push([c.lat, c.lon])
       continue
     }
     const line: L.LatLngExpression[] = problem.coords.map((p) => [p.lat, p.lon])
@@ -51,25 +163,17 @@ function paintProblems(layer: L.LayerGroup, analysis: GpxAnalysis) {
       color: PROBLEM_COLOR,
       weight: 4,
       opacity: 0.95,
-    }).addTo(layer)
+    }).addTo(problemsLayer)
   }
 
-  if (dups.length > DUP_MARKER_LIMIT) {
-    L.polyline(dups, {
+  for (const ll of sparseDups) {
+    L.circleMarker(ll, {
+      radius: 5,
       color: PROBLEM_COLOR,
-      weight: 5,
-      opacity: 0.75,
-    }).addTo(layer)
-  } else {
-    for (const ll of dups) {
-      L.circleMarker(ll, {
-        radius: 5,
-        color: PROBLEM_COLOR,
-        fillColor: PROBLEM_COLOR,
-        fillOpacity: 0.9,
-        weight: 1,
-      }).addTo(layer)
-    }
+      fillColor: PROBLEM_COLOR,
+      fillOpacity: 0.9,
+      weight: 1,
+    }).addTo(problemsLayer)
   }
 }
 
@@ -78,8 +182,15 @@ function TrackMapInner({ analysis }: TrackMapProps) {
   const mapRef = useRef<L.Map | null>(null)
   const trackLayerRef = useRef<L.LayerGroup | null>(null)
   const problemsLayerRef = useRef<L.LayerGroup | null>(null)
+  const basemapsRef = useRef<Record<BasemapId, L.TileLayer> | null>(null)
   const analysisRef = useRef(analysis)
   analysisRef.current = analysis
+
+  const [basemap, setBasemap] = useState<BasemapId>('map')
+
+  const summary = useMemo(() => summarizeMapProblems(analysis), [analysis])
+  const summaryRef = useRef(summary)
+  summaryRef.current = summary
 
   useEffect(() => {
     const el = containerRef.current
@@ -112,7 +223,8 @@ function TrackMapInner({ analysis }: TrackMapProps) {
       },
     )
 
-    // setView before any overlays — avoids Leaflet _pxBounds undefined crashes.
+    basemapsRef.current = { map: osm, topo, satellite: esri }
+
     const map = L.map(el, {
       zoomControl: true,
       attributionControl: true,
@@ -120,43 +232,21 @@ function TrackMapInner({ analysis }: TrackMapProps) {
 
     osm.addTo(map)
 
-    L.control
-      .layers(
-        {
-          OpenStreetMap: osm,
-          OpenTopoMap: topo,
-          Satellite: esri,
-        },
-        undefined,
-        { position: 'topright' },
-      )
-      .addTo(map)
-
     const trackLayer = L.layerGroup().addTo(map)
     const problemsLayer = L.layerGroup().addTo(map)
     trackLayerRef.current = trackLayer
     problemsLayerRef.current = problemsLayer
     mapRef.current = map
 
-    const draw = (a: GpxAnalysis) => {
-      trackLayer.clearLayers()
-      problemsLayer.clearLayers()
+    const draw = (a: GpxAnalysis, s: MapProblemSummary) => {
       map.invalidateSize()
-
       if (a.track.length === 0) {
+        trackLayer.clearLayers()
+        problemsLayer.clearLayers()
         map.setView([0, 0], 2)
         return
       }
-
-      const latlngs = downsampleTrack(a.track, TRACK_DISPLAY_MAX)
-      L.polyline(latlngs, {
-        color: TRACK_COLOR,
-        weight: 3,
-        opacity: 0.85,
-      }).addTo(trackLayer)
-
-      paintProblems(problemsLayer, a)
-
+      paintAnalysis(trackLayer, problemsLayer, a, s)
       const bounds = L.latLngBounds(
         [a.latMin, a.lonMin],
         [a.latMax, a.lonMax],
@@ -171,10 +261,9 @@ function TrackMapInner({ analysis }: TrackMapProps) {
     })
     ro.observe(el)
 
-    // Wait for layout so path clipping has a valid pixel bounds.
     const raf = requestAnimationFrame(() => {
       map.invalidateSize()
-      draw(analysisRef.current)
+      draw(analysisRef.current, summaryRef.current)
     })
 
     return () => {
@@ -183,13 +272,28 @@ function TrackMapInner({ analysis }: TrackMapProps) {
       mapRef.current = null
       trackLayerRef.current = null
       problemsLayerRef.current = null
+      basemapsRef.current = null
       try {
         map.remove()
       } catch {
-        // StrictMode remount can leave canvas/SVG mid-teardown.
+        // StrictMode remount can leave renderer mid-teardown.
       }
     }
   }, [])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const layers = basemapsRef.current
+    if (!map || !layers) return
+    for (const id of Object.keys(layers) as BasemapId[]) {
+      const layer = layers[id]
+      if (id === basemap) {
+        if (!map.hasLayer(layer)) layer.addTo(map)
+      } else if (map.hasLayer(layer)) {
+        map.removeLayer(layer)
+      }
+    }
+  }, [basemap])
 
   useEffect(() => {
     const map = mapRef.current
@@ -197,24 +301,15 @@ function TrackMapInner({ analysis }: TrackMapProps) {
     const problemsLayer = problemsLayerRef.current
     if (!map || !trackLayer || !problemsLayer) return
 
-    trackLayer.clearLayers()
-    problemsLayer.clearLayers()
     map.invalidateSize()
-
     if (analysis.track.length === 0) {
+      trackLayer.clearLayers()
+      problemsLayer.clearLayers()
       map.setView([0, 0], 2)
       return
     }
 
-    const latlngs = downsampleTrack(analysis.track, TRACK_DISPLAY_MAX)
-    L.polyline(latlngs, {
-      color: TRACK_COLOR,
-      weight: 3,
-      opacity: 0.85,
-    }).addTo(trackLayer)
-
-    paintProblems(problemsLayer, analysis)
-
+    paintAnalysis(trackLayer, problemsLayer, analysis, summary)
     const bounds = L.latLngBounds(
       [analysis.latMin, analysis.lonMin],
       [analysis.latMax, analysis.lonMax],
@@ -222,9 +317,40 @@ function TrackMapInner({ analysis }: TrackMapProps) {
     if (bounds.isValid()) {
       map.fitBounds(bounds.pad(0.08))
     }
-  }, [analysis])
+  }, [analysis, summary])
 
-  return <div ref={containerRef} className="track-map" role="img" aria-label="Track map" />
+  return (
+    <div className="track-map-shell">
+      <div
+        className="basemap-toggle"
+        role="group"
+        aria-label="Basemap"
+      >
+        {(
+          [
+            ['map', 'Map'],
+            ['topo', 'Topo'],
+            ['satellite', 'Satellite'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={basemap === id ? 'active' : undefined}
+            onClick={() => setBasemap(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div
+        ref={containerRef}
+        className="track-map"
+        role="img"
+        aria-label="Track map"
+      />
+    </div>
+  )
 }
 
 type BoundaryState = { error: string | null }
