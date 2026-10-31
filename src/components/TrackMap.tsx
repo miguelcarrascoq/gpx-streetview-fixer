@@ -10,15 +10,70 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { GpxAnalysis } from '../lib/gpxStreetView'
 
-const TRACK_COLOR = '#7eb8a4'
-const OVERSAMPLE_COLOR = '#e6b84d'
-const PROBLEM_COLOR = '#ef4444'
+const TRACK_COLOR = '#2ee6a6'
+const OVERSAMPLE_COLOR = '#ffd24a'
+const PROBLEM_COLOR = '#ff3b3b'
+const LINE_CASING = '#0a1210'
 /** Sparse dup markers above this → treat as dense oversample. */
 const DUP_MARKER_LIMIT = 400
 /** Fraction of track duration seconds with dup-time → dense. */
 const DUP_DENSE_RATIO = 0.4
 /** Max vertices kept for the base track polyline. */
 const TRACK_DISPLAY_MAX = 4000
+
+/** Dark casing + bright stroke so lines stay readable on Map/Topo/Satellite. */
+function addCasedPolyline(
+  layer: L.LayerGroup,
+  latlngs: L.LatLngExpression[],
+  opts: {
+    color: string
+    weight: number
+    opacity?: number
+    dashArray?: string
+  },
+) {
+  const casing = Math.max(opts.weight + 3, Math.round(opts.weight * 1.7))
+  L.polyline(latlngs, {
+    color: LINE_CASING,
+    weight: casing,
+    opacity: 0.92,
+    lineCap: 'round',
+    lineJoin: 'round',
+    dashArray: opts.dashArray,
+  }).addTo(layer)
+  L.polyline(latlngs, {
+    color: opts.color,
+    weight: opts.weight,
+    opacity: opts.opacity ?? 1,
+    lineCap: 'round',
+    lineJoin: 'round',
+    dashArray: opts.dashArray,
+  }).addTo(layer)
+}
+
+/** High-contrast red anomaly marker (halo + fill). */
+function addAnomalyMarker(
+  layer: L.LayerGroup,
+  latlng: L.LatLngExpression,
+  radius = 8,
+) {
+  L.circleMarker(latlng, {
+    radius: radius + 3,
+    color: '#ffffff',
+    fillColor: '#ffffff',
+    fillOpacity: 0.95,
+    weight: 0,
+    opacity: 1,
+  }).addTo(layer)
+  L.circleMarker(latlng, {
+    radius,
+    color: LINE_CASING,
+    fillColor: PROBLEM_COLOR,
+    fillOpacity: 1,
+    weight: 2,
+    opacity: 1,
+  }).addTo(layer)
+}
 
 type BasemapId = 'map' | 'topo' | 'satellite'
 
@@ -118,12 +173,11 @@ function paintAnalysis(
   const latlngs = downsampleTrack(analysis.track, TRACK_DISPLAY_MAX)
 
   if (summary.denseOversample) {
-    L.polyline(latlngs, {
+    addCasedPolyline(trackLayer, latlngs, {
       color: OVERSAMPLE_COLOR,
-      weight: 4,
-      opacity: 0.9,
-      dashArray: '8 10',
-    }).addTo(trackLayer)
+      weight: 5,
+      dashArray: '10 8',
+    })
 
     const idxs = [
       0,
@@ -133,20 +187,13 @@ function paintAnalysis(
     for (const i of idxs) {
       const p = analysis.track[i]
       if (!p) continue
-      L.circleMarker([p.lat, p.lon], {
-        radius: 6,
-        color: PROBLEM_COLOR,
-        fillColor: OVERSAMPLE_COLOR,
-        fillOpacity: 0.95,
-        weight: 2,
-      }).addTo(problemsLayer)
+      addAnomalyMarker(problemsLayer, [p.lat, p.lon], 9)
     }
   } else {
-    L.polyline(latlngs, {
+    addCasedPolyline(trackLayer, latlngs, {
       color: TRACK_COLOR,
-      weight: 3,
-      opacity: 0.85,
-    }).addTo(trackLayer)
+      weight: 5,
+    })
   }
 
   const sparseDups: L.LatLngExpression[] = []
@@ -159,21 +206,21 @@ function paintAnalysis(
     }
     const line: L.LatLngExpression[] = problem.coords.map((p) => [p.lat, p.lon])
     if (line.length < 2) continue
-    L.polyline(line, {
+    addCasedPolyline(problemsLayer, line, {
       color: PROBLEM_COLOR,
-      weight: 4,
-      opacity: 0.95,
-    }).addTo(problemsLayer)
+      weight: 6,
+    })
+    // Endpoints of gap/speed segments as red anomaly dots.
+    const first = problem.coords[0]
+    const last = problem.coords[problem.coords.length - 1]
+    if (first) addAnomalyMarker(problemsLayer, [first.lat, first.lon], 7)
+    if (last && last !== first) {
+      addAnomalyMarker(problemsLayer, [last.lat, last.lon], 7)
+    }
   }
 
   for (const ll of sparseDups) {
-    L.circleMarker(ll, {
-      radius: 5,
-      color: PROBLEM_COLOR,
-      fillColor: PROBLEM_COLOR,
-      fillOpacity: 0.9,
-      weight: 1,
-    }).addTo(problemsLayer)
+    addAnomalyMarker(problemsLayer, ll, 8)
   }
 }
 

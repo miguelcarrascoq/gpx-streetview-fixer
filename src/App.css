@@ -651,26 +651,32 @@ body {
 }
 
 .map-legend .swatch.track {
-  background: #7eb8a4;
+  background: #2ee6a6;
+  box-shadow: 0 0 0 1.5px #0a1210;
 }
 
 .map-legend .swatch.oversample {
   background: repeating-linear-gradient(
     90deg,
-    #e6b84d 0 6px,
+    #ffd24a 0 6px,
     transparent 6px 10px
   );
+  box-shadow: 0 0 0 1.5px #0a1210;
 }
 
 .map-legend .swatch.gap {
-  background: #ef4444;
+  background: #ff3b3b;
+  box-shadow: 0 0 0 1.5px #0a1210;
 }
 
 .map-legend .swatch.dup {
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 0.7rem;
+  height: 0.7rem;
   border-radius: 50%;
-  background: #ef4444;
+  background: #ff3b3b;
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 3.5px #0a1210;
 }
 
 .grid {
