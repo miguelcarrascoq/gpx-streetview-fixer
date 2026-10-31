@@ -89,9 +89,20 @@ export function parseVidLocalParts(filename: string): {
   }
 }
 
+/** Hours ahead of UTC, e.g. -3 → `UTC-3`, 5.5 → `UTC+5:30`. */
+export function formatUtcOffsetHours(hours: number): string {
+  if (!Number.isFinite(hours)) return 'UTC'
+  const sign = hours < 0 ? '-' : '+'
+  const totalMinutes = Math.round(Math.abs(hours) * 60)
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  if (m === 0) return `UTC${sign}${h}`
+  return `UTC${sign}${h}:${String(m).padStart(2, '0')}`
+}
+
 /**
- * Convert "local" date/time components to UTC with a fixed offset
- * (America/Santiago ≈ UTC-3 year-round since 2019).
+ * Convert local date/time components to UTC.
+ * `utcOffsetHours` is hours ahead of UTC (Chile summer −3, Chile winter −4).
  */
 export function localPartsToUtc(
   parts: { y: number; mo: number; d: number; h: number; mi: number; s: number },
@@ -365,7 +376,7 @@ export function analyzeTrack(
       issues.push({
         id: 'video-sync',
         severity: 'error',
-        message: `GPX start (${formatGpxTime(timeStart)}) does not match video from filename (${formatGpxTime(videoStartFromFilename)} America/Santiago→UTC). Offset ${timeOffsetSecondsVsFilename.toFixed(0)} s. Street View will fail if the MP4 uses the file time.`,
+        message: `GPX start (${formatGpxTime(timeStart)}) does not match video from filename (${formatGpxTime(videoStartFromFilename)}, ${formatUtcOffsetHours(opts.utcOffsetHours ?? -3)}). Offset ${timeOffsetSecondsVsFilename.toFixed(0)} s. Street View will fail if the MP4 uses the file time.`,
       })
     }
   } else if (opts.sourceFilename) {
@@ -508,7 +519,7 @@ export function fixGpx(xml: string, options: FixOptions = {}): FixResult {
     points = shiftToVideoStart(points, videoStart)
     if (before.getTime() !== points[0].time.getTime()) {
       applied.push(
-        `Time aligned to video: ${formatGpxTime(before)} → ${formatGpxTime(points[0].time)} (VID_* at UTC${utcOffsetHours >= 0 ? '+' : ''}${utcOffsetHours} → UTC).`,
+        `Time aligned to video: ${formatGpxTime(before)} → ${formatGpxTime(points[0].time)} (VID_* at ${formatUtcOffsetHours(utcOffsetHours)} → UTC).`,
       )
     } else {
       applied.push('Timestamps already aligned with video from filename.')

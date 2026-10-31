@@ -1,10 +1,17 @@
 import { useMemo, useState } from 'react'
+import TimezonePicker from './components/TimezonePicker'
 import {
   fixGpx,
   formatGpxTime,
+  parseVidLocalParts,
   type FixResult,
   type GpxIssue,
 } from './lib/gpxStreetView'
+import {
+  DEFAULT_TIME_ZONE,
+  utcOffsetHoursAt,
+  utcOffsetHoursForWallClock,
+} from './lib/timezones'
 import './App.css'
 
 function severityClass(s: GpxIssue['severity']): string {
@@ -69,7 +76,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [startOverride, setStartOverride] = useState('')
-  const [offset, setOffset] = useState('-3')
+  const [timeZone, setTimeZone] = useState(DEFAULT_TIME_ZONE)
 
   const errorCount = useMemo(
     () => result?.analysisAfter.issues.filter((i) => i.severity === 'error').length ?? 0,
@@ -83,7 +90,10 @@ export default function App() {
     setFileName(file.name)
     try {
       const xml = await file.text()
-      const offsetN = Number(offset)
+      const wall = parseVidLocalParts(file.name)
+      const offsetN = wall
+        ? utcOffsetHoursForWallClock(timeZone, wall)
+        : utcOffsetHoursAt(timeZone, new Date())
       const videoStartUtc =
         startOverride.trim().length > 0 ? new Date(startOverride.trim()) : null
       if (videoStartUtc && Number.isNaN(videoStartUtc.getTime())) {
@@ -146,15 +156,13 @@ export default function App() {
           </label>
 
           <div className="controls">
-            <label>
-              Camera offset (UTC hours)
-              <input
-                type="number"
-                step="1"
-                value={offset}
-                onChange={(e) => setOffset(e.target.value)}
-              />
-            </label>
+            <div className="field">
+              <span className="field-label">Camera time zone</span>
+              <TimezonePicker value={timeZone} onChange={setTimeZone} disabled={busy} />
+              <span className="field-hint">
+                Local time in the <code>VID_*</code> name. Daylight saving follows the clip date.
+              </span>
+            </div>
             <label>
               Video start UTC (optional)
               <input
@@ -207,8 +215,8 @@ export default function App() {
               Export the GPX from Insta360 Studio together with the 360 MP4 of the same clip.
             </li>
             <li>
-              Keep the <code>VID_YYYYMMDD_HHMMSS</code> prefix in the name (camera
-              local time; for Chile we use UTC−3).
+              Keep the <code>VID_YYYYMMDD_HHMMSS</code> prefix (camera local time) and
+              set the camera time zone above. Continental Chile is Santiago.
             </li>
             <li>
               Here in the web app, or via terminal:
