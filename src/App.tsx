@@ -182,6 +182,20 @@ export default function App() {
           <>
             <section className="card applied">
               <h2>Fixes applied</h2>
+              <dl className="stats stats-summary">
+                <div>
+                  <dt>Current points</dt>
+                  <dd>
+                    {result.analysisBefore.pointCount.toLocaleString('en-US')}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Export points</dt>
+                  <dd>
+                    {result.analysisAfter.pointCount.toLocaleString('en-US')}
+                  </dd>
+                </div>
+              </dl>
               <ol>
                 {result.applied.map((line) => (
                   <li key={line}>{line}</li>
