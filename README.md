@@ -2,6 +2,8 @@
 
 Tool to **analyze and fix** `.gpx` files (e.g. exported from Insta360 Studio) before uploading them to [Google Street View Studio](https://streetviewstudio.maps.google.com/) together with the 360 video.
 
+![App preview with sample GPX VID_20251117_054832_00_003_original.gpx](docs/preview.jpg)
+
 ## What it fixes
 
 1. **Bounds with wrong signs** — Insta360 sometimes writes positive lat/lon in `<bounds>` while trackpoints are in the southern/western hemisphere (Chile, etc.).
@@ -14,10 +16,10 @@ Tool to **analyze and fix** `.gpx` files (e.g. exported from Insta360 Studio) be
 npm install
 
 # Report only (does not write a file)
-npm run analyze -- ./uploads/VID_20251117_054832_00_003.gpx
+npm run analyze -- ./uploads/VID_20251117_054832_00_003_original.gpx
 
 # Fix → writes *_streetview.gpx next to the original
-npm run fix -- ./uploads/VID_20251117_054832_00_003.gpx
+npm run fix -- ./uploads/VID_20251117_054832_00_003_original.gpx
 
 # Explicit output
 npm run fix -- ./my-clip.gpx --out ./out/my-clip_streetview.gpx
@@ -53,13 +55,14 @@ Pushes to `main` build and publish the site with GitHub Actions (GitHub Pages).
 
 | File | Description |
 |------|-------------|
-| [`uploads/VID_20251117_054832_00_003_f286.gpx`](uploads/VID_20251117_054832_00_003_f286.gpx) | Original Insta360 (bad bounds, ~10 Hz, shifted dates) |
+| [`uploads/VID_20251117_054832_00_003_original.gpx`](uploads/VID_20251117_054832_00_003_original.gpx) | Original Insta360 export (bad bounds, ~10 Hz, dates ≠ `VID_*`) |
+| [`uploads/VID_20251117_054832_00_003_f286.gpx`](uploads/VID_20251117_054832_00_003_f286.gpx) | Same clip (alternate copy) |
 | [`output/VID_20251117_054832_00_003_streetview.gpx`](output/VID_20251117_054832_00_003_streetview.gpx) | Fixed file ready for Street View |
 
 ### Fixes applied to this clip
 
-- Bounds recalculated to **negative** lat/lon (Temuco, Chile area).
-- Start aligned to `VID_20251117_054832` → `2025-11-17T08:48:32Z` (05:48:32 local UTC−3).
+- Bounds recalculated to **negative** lat/lon (Temuco / Padre Las Casas area).
+- Kept GPX timestamps (`2026-09-14T17:11:52Z`) because they disagree with `VID_*` after Insta360 re-export — prefer MP4 `creation_time` when uploading.
 - Reduced from ~17,147 points to ~1 point/s (~29 min of track).
 
 If Street View says GPS and video do not overlap, read the real MP4 time (Exif / Studio) and re-run with `--start <ISO-UTC>`.
