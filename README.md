@@ -39,11 +39,15 @@ npm run fix -- ./my-clip.gpx --offset -3
 
 ## Web app
 
+**Live:** [miguelcarrascoq.github.io/gpx-streetview-fixer](https://miguelcarrascoq.github.io/gpx-streetview-fixer/)
+
 ```bash
 npm run dev
 ```
 
 Open http://127.0.0.1:43123 — drop a `.gpx`, review the report, and download the fixed file.
+
+Pushes to `main` build and publish the site with GitHub Actions (GitHub Pages).
 
 ## Project sample files
 
